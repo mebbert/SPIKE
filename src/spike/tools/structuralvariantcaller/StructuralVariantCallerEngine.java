@@ -3,6 +3,11 @@
  */
 package spike.tools.structuralvariantcaller;
 
+import net.sourceforge.argparse4j.inf.ArgumentParser;
+import net.sourceforge.argparse4j.inf.Namespace;
+
+import org.apache.log4j.Logger;
+
 import spike.Engine;
 
 /**
@@ -11,19 +16,20 @@ import spike.Engine;
  */
 public class StructuralVariantCallerEngine implements Engine {
 
-	/**
-	 * 
-	 */
-	public StructuralVariantCallerEngine() {
-		// TODO Auto-generated constructor stub
+	private static Logger logger = Logger.getLogger(StructuralVariantCallerEngine.class);
+	private static ArgumentParser parser;
+	private Namespace parsedArgs;
+	
+	public StructuralVariantCallerEngine(String[] args) {
+		init(args);
 	}
-
-	/**
-	 * @param args
-	 */
-	public static void main(String[] args) {
-		// TODO Auto-generated method stub
-
+	
+	private void init(String[] args){
+		
+	}
+	
+	public void callVariants(){
+		
 	}
 
 }
