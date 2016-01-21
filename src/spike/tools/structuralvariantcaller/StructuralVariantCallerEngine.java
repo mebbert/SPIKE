@@ -38,11 +38,11 @@ public class StructuralVariantCallerEngine implements Engine {
 		ArgumentGroup ioOptions = parser.addArgumentGroup("input arguments");
 		
 		ioOptions
-					.addArgument("-i", "--input")
-					.dest("BAM")
-					.metavar("SAM/BAM")
-					.required(true)
-					.help("Specify the input file. This can be a SAM or BAM file.");
+				.addArgument("-i", "--input")
+				.dest("BAM")
+				.metavar("SAM/BAM")
+				.required(true)
+				.help("Specify the input file. This can be a SAM or BAM file.");
 		
 		ioOptions
 				.addArgument("-o", "--output")
@@ -61,6 +61,10 @@ public class StructuralVariantCallerEngine implements Engine {
 	
 	public void callVariants(){
 		
+		String bam = parsedArgs.getString("BAM");
+		String vcf = parsedArgs.getString("VCF");
+		
+		// Start doing your thing.
 	}
 
 }
