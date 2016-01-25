@@ -5,3 +5,9 @@
 .classpath
 .project
 .settings/
+*.log
+*.vcf
+*.fasta
+*.dict
+*.fai
+*javadoc*
