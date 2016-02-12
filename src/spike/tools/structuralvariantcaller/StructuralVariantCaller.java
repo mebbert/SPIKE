@@ -145,7 +145,9 @@ public class StructuralVariantCaller /*implements Runnable*/ {
 		 * We use the reference segment's original location (read name)
 		 * to determine the locus interval.
 		 */
-		Interval prevLocusInterval = null, currLocusInterval;
+		Interval prevLocusInterval = null, currLocusInterval, pre, post,
+				refStartInterval, refEndInterval, varStartInterval,
+				varEndInterval;
 
 		boolean inOrder;
 
@@ -175,52 +177,101 @@ public class StructuralVariantCaller /*implements Runnable*/ {
 			 * translocation.
 			 */
 			if(!inOrder){
+				
+				pre = prevLocusInterval;
+				post = currLocusInterval;
 
 				/* If prev is before curr, we'll assume it's a deletion, unless
 				 * we find it's a translocation, later.
+				 * 
+				 * TODO: Keep looping until the next boundary and determine if it was
+				 * a deletion, or something else.
 				 */
-				if(prevLocusInterval.compareTo(currLocusInterval) <= 0){
+				if(pre.getContig().equals(post.getContig())
+						&& pre.getEnd() < post.getStart()){
+
+					var = buildVariant(this.referenceReader, this.header,
+							pre.getContig(),
+							pre.getStart(),
+							post.getStart(),
+							pre.getStart(),
+							pre.getStart());
+
+					deletionVarList.add(var);
 					
+					preList.add(pre);
+					postList.add(post);
+
+					deletionPreList.add(pre);
+					deletionPostList.add(post);	
 				}
 				else{
-					preList.push(prevLocusInterval);
-					postList.push(currLocusInterval);
-					resolveAllStructuralVariantsInRegion(iter);
 					
-					if(!preList.isEmpty() || !postList.isEmpty() ||
-							!deletionPreList.isEmpty() ||
-							!deletionPostList.isEmpty() ||
-							!deletionVarList.isEmpty()){
-						
-						throw new RuntimeException("ERROR: all stacks should be"
-								+ " empty. Something is very wrong!\nPreStack: "
-								+ preList.toString() + "\n\nPostStack: " 
-								+ postList.toString() + "\n\nDeletionPreStack: "
-								+ deletionPreList.toString() + "\n\nDeletionPostStack: "
-								+ deletionPostList.toString() + "\n\nDeletionVarStack: "
-								+ deletionVarList.toString());
+					/* Loop backwards over the lists to see if we can
+					 * resolve any boundaries
+					 */
+					for(int i = preList.size() - 1; i >= 0; i--){
+
+						if(LocusInfoQueue.intervalsOrderedNonOverlapping(
+										this.preList.get(i), post)){
+
+							/* See if preList.get(i) was previously treated
+							 * as a deletion. If so, get rid of it
+							 * 
+							 * TODO: Make sure the Interval.class equals method
+							 * is be called appropriately.
+							 */
+							int index = deletionPreList.indexOf(preList.get(i));
+							if(index >= 0){
+								deletionPreList.remove(index);
+								deletionPostList.remove(index);
+								deletionVarList.remove(index);
+							}
+							
+							/* Since we found the match, now loop forward from
+							 * where we are, resolving all boundaries in between.
+							 */
+							for(int j = i + 1; j < preList.size(); ){
+
+								/* Create and write the variant */
+								refStartInterval = this.preList.get(i);
+								refEndInterval = refStartInterval;
+								varStartInterval = this.postList.get(i);
+								varEndInterval = this.preList.get(j);
+								var = buildVariant(this.referenceReader, this.header,
+										refStartInterval.getContig(),
+										refStartInterval.getStart(), 
+										refEndInterval.getStart(),
+										varStartInterval.getStart(),
+										varEndInterval.getStart());
+								this.vw.writeVariantToVCF(var);
+								
+								/* remove this boundary from pre and post list */
+								preList.remove(i);
+								postList.remove(i);
+								
+								/* don't increment i or j, because we just
+								 * removed the objects at i.
+								 */
+							}
+							
+							/* Write any deletions that remain in the list */
+							// TODO: Premature! see glass. Maybe I can't write
+							// deletions until the end?
+							writeDeletions();
+							
+							break;
+						}
 					}
+
+					/* If we didn't resolve this boundary with any existing,
+					 * just add them.
+					 */
+					preList.add(pre);
+					postList.add(post);
 				}
 		
 			}
-
-			/* Every (MAXSIZE/2) loci, check for a mass of reads that are
-			 * out of order.
-			 */
-//			if(locusCount++ % (MAXSIZE/2) == 0){
-//				
-//				/* If the running LocusInfoQueue is out of order, there
-//				 * may be a deletion or translocation.
-//				 */
-//				ArrayList<Interval> orderBreakingLoci =
-//						running_liq.intervalsOrderedNonOverlapping();
-//				if(orderBreakingLoci.size() > 0){
-//					
-//					for(int i = 0; i < orderBreakingLoci.size(); i += 2){
-//						orderBreakingLoci.get(i).
-//					}
-//				}
-//			}
 
 			int depth = locus.getRecordAndPositions().size();
 
@@ -273,11 +324,25 @@ public class StructuralVariantCaller /*implements Runnable*/ {
 		sli.close();
 	}
 	
-
+	
+	/**
+	 * 
+	 */
+	private void writeDeletions(){
+		for(VariantContext var : deletionVarList){
+			vw.writeVariantToVCF(var);
+		}
+		
+		deletionVarList.clear();
+		deletionPreList.clear();
+		deletionPostList.clear();
+	}
+	
+	
 	/**
 	 * @param iter
 	 */
-	private void resolveAllStructuralVariantsInRegion(
+	private void resolveStructuralVariantsInRegion(
 			Iterator<SamLocusIterator.LocusInfo> iter){
 
 		
@@ -382,6 +447,116 @@ public class StructuralVariantCaller /*implements Runnable*/ {
 			}
 		}
 	}
+	
+
+//	/**
+//	 * @param iter
+//	 */
+//	private void resolveAllStructuralVariantsInRegion(
+//			Iterator<SamLocusIterator.LocusInfo> iter){
+//
+//		
+//		/* These locus Intervals are in context of the reference genome.
+//		 * We use the reference segment's original location (read name)
+//		 * to determine the locus interval.
+//		 */
+//		Interval refStartInterval, refEndInterval, varStartInterval,
+//					varEndInterval, pre, post;
+//
+//		VariantContext var;
+//		
+//		pre = preList.peek();
+//		post = postList.peek();
+//		
+//		/* If prev is before curr, we'll assume it's a deletion, unless
+//		 * we find it's a translocation, later. We must already be in a
+//		 * variant where an end order-breaking
+//		 * boundary exists, so call it a deletion, push it on the stack,
+//		 * and proceed. 
+//		 */
+//		if(pre.getContig().equals(post.getContig())
+//				&& pre.getEnd() < post.getStart()){
+//
+//			var = buildVariant(this.referenceReader, this.header,
+//					pre.getContig(),
+//					pre.getStart(),
+//					post.getStart(),
+//					pre.getStart(),
+//					pre.getStart());
+//
+//			deletionVarList.push(var);
+//
+//			/* Have to pop so we don't get in an infinite loop,
+//			 * but track these in case they're actually a translocation.
+//			 */
+//			deletionPreList.push(preList.pop());
+//			deletionPostList.push(postList.pop());
+//			
+//			/* keep resolving */
+//			resolveAllStructuralVariantsInRegion(iter);
+//		}
+//		else{ // Must be translocation, run until we return to prevLocusInterval
+//			
+//			ArrayList<Interval> orderBreakingBoundary =
+//					walkToNextOrderBreakingBoundary(iter);
+//
+//			pre = orderBreakingBoundary.get(0);
+//			post = orderBreakingBoundary.get(1);
+//
+//			/* If the 'post' interval (the right side of the next
+//			 * order-breaking boundary) is "in order" with the 
+//			 * the previous 'pre' interval, then we've found the
+//			 * end of this variant.
+//			 */
+//			for(int i = preList.size() - 1; i >= 0; i--){
+//
+//				if(LocusInfoQueue.intervalsOrderedNonOverlapping(
+//								this.preList.get(i), post)){
+//					
+//					/* If the deletionPostStack.peek() is lexicographically before
+//					 * pre, then this must have been another translocation, not a
+//					 * deletion. The deletionPostStack would actually mark the
+//					 * beginning of the translocation, because it was the 'post'
+//					 * position of that boundary.
+//					 */
+//					if(deletionPostList.peek().compareTo(pre) <= 0){
+//						varStartInterval = deletionPostList.pop();
+//						varEndInterval = pre;
+//						refStartInterval = deletionPreList.pop();
+//						refEndInterval = refStartInterval;
+//						var = buildVariant(this.referenceReader, this.header,
+//								refStartInterval.getContig(),
+//								refStartInterval.getStart(), 
+//								refEndInterval.getStart(),
+//								varStartInterval.getStart(),
+//								varEndInterval.getStart());
+//						this.vw.writeVariantToVCF(var);
+//						
+//						deletionVarList.pop(); // get rid of the false deletion
+//
+//					}
+//					
+//					/* Create and write the variant */
+//					varStartInterval = this.postList.get(i);
+//					varEndInterval = pre;
+//					refStartInterval = this.preList.get(i);
+//					refEndInterval = refStartInterval;
+//					var = buildVariant(this.referenceReader, this.header,
+//							refStartInterval.getContig(),
+//							refStartInterval.getStart(), 
+//							refEndInterval.getStart(),
+//							varStartInterval.getStart(),
+//							varEndInterval.getStart());
+//					this.vw.writeVariantToVCF(var);
+//				}
+//				else{
+//					preList.push(pre);
+//					postList.push(post);
+//					resolveAllStructuralVariantsInRegion(iter);
+//				}
+//			}
+//		}
+//	}
 	
 	/**
 	 * Walk until we hit another order-breaking boundary and return
