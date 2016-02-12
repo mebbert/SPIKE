@@ -29,6 +29,7 @@ public class VCFWriter {
 
 	private IndexedFastaSequenceFile indexedFastaSequenceFile;
 	private VariantContextWriter out;
+	private static final int BUFFER_SIZE = 0;
 
 	/**
 	 * @throws FileNotFoundException 
@@ -52,7 +53,7 @@ public class VCFWriter {
 		VariantContextWriterBuilder builder = new VariantContextWriterBuilder()
 	       .setReferenceDictionary(dict)
 	       .setOption(Options.INDEX_ON_THE_FLY)
-	       .setBuffer(8192);
+	       .setBuffer(BUFFER_SIZE);
 		
 		this.out = builder
 	       .setOutputFile(file)

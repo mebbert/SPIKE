@@ -11,46 +11,431 @@ import htsjdk.samtools.SAMRecordIterator;
 import htsjdk.samtools.SamReader;
 import htsjdk.samtools.SamReaderFactory;
 import htsjdk.samtools.ValidationStringency;
+import htsjdk.samtools.filter.MappingQualityFilter;
+import htsjdk.samtools.filter.SamRecordFilter;
 import htsjdk.samtools.reference.IndexedFastaSequenceFile;
+import htsjdk.samtools.util.Interval;
+import htsjdk.samtools.util.SamLocusIterator;
+import htsjdk.samtools.util.SamLocusIterator.LocusInfo;
 import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.GenotypeBuilder;
 import htsjdk.variant.variantcontext.GenotypesContext;
+import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.VariantContextBuilder;
 
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Stack;
 import java.util.TreeSet;
 
 import org.apache.commons.math3.stat.descriptive.DescriptiveStatistics;
 import org.apache.log4j.Logger;
 
 import spike.datastructures.LocusCoverageQueue;
+import spike.datastructures.LocusInfoQueue;
 
 /**
  * @author markebbert
  *
  */
-public class StructuralVariantCaller {
+public class StructuralVariantCaller /*implements Runnable*/ {
 	
 	private static Logger logger = Logger.getLogger(StructuralVariantCaller.class);
+	private static final int MAX_STD_DEV = 5;
+	private static int minDepth;
+	private static int minSVSize;
+	private static int minMapQual;
+	private static ValidationStringency samValidationStringency;
+	
+//	private int startWalking, endWalking;
+	
+	private File samFile;
+
+	private LinkedList<Interval> preList, postList,
+				deletionPreList, deletionPostList;
+	private LinkedList<VariantContext> deletionVarList;
+
+	private IndexedFastaSequenceFile referenceReader;
+	private SAMFileHeader header;
+	private SamReader reader;
+
+	private VCFWriter vw;
 
 	/**
+	 * @throws FileNotFoundException 
 	 * 
 	 */
-	public StructuralVariantCaller() {
-		return;
+	public StructuralVariantCaller(final File samFile, final File outVCF,
+			File sampleRef, final int minSVSize, final int minMapQual,
+			final int minDepth, final ValidationStringency vs/*, int startWalking,
+			int endWalking*/) throws FileNotFoundException {
+		
+//		this.startWalking = startWalking;
+//		this.endWalking = endWalking;
+		
+		
+		StructuralVariantCaller.minSVSize = minSVSize;
+		StructuralVariantCaller.minMapQual = minMapQual;
+		StructuralVariantCaller.minDepth = minDepth;
+		StructuralVariantCaller.samValidationStringency = vs;
+		
+		this.preList = new LinkedList<Interval>();
+		this.postList = new LinkedList<Interval>();
+		this.deletionVarList = new LinkedList<VariantContext>();
+		
+		this.referenceReader =
+				new IndexedFastaSequenceFile(sampleRef);
+
+		this.samFile = samFile;
+		SamReader reader = openSam(samFile,
+				StructuralVariantCaller.samValidationStringency);
+		this.header = reader.getFileHeader();
+		
+		/* Get sample name(s) from the sam/bam file and create
+		 * a VCFWriter.
+		 */
+        TreeSet<String> samples = new TreeSet<String>();
+        for(SAMReadGroupRecord group : header.getReadGroups()){
+        	samples.add(group.getSample());
+        }
+		this.vw = new VCFWriter(outVCF, sampleRef, samples);
+		
+	}
+
+	
+	/**
+	 * @throws FileNotFoundException
+	 */
+	public void startWalkingByLocus() throws FileNotFoundException{
+
+		SamLocusIterator sli = new SamLocusIterator(reader);
+		
+
+		/* Filter reads with a mapQ < StructuralVariantCaller.minMapQual 
+		 * and reads aligning to the negative strand
+		 */
+		List<SamRecordFilter> samFilters = Arrays.asList(
+				new MappingQualityFilter(StructuralVariantCaller.minMapQual),
+				new NegativeStrandFilter());
+
+		sli.setSamFilters(samFilters);
+		
+		Iterator<SamLocusIterator.LocusInfo> iter = sli.iterator();
+		
+
+
+
+		/* Keep a running set of loci.
+		 * Only keep information for this many (MAXSIZE)
+		 * loci.
+		 */
+		final int MAXSIZE = 50;
+//		LocusInfoQueue running_liq =
+//				new LocusInfoQueue(StructuralVariantCaller.minSVSize, MAXSIZE),
+//				possibleVarLiq;
+		LocusInfo locus;
+		
+		/* These locus Intervals are in context of the reference genome.
+		 * We use the reference segment's original location (read name)
+		 * to determine the locus interval.
+		 */
+		Interval prevLocusInterval = null, currLocusInterval;
+
+		boolean inOrder;
+
+
+		VariantContext var;
+		
+		/* Track positions coverage was lost and gained, as
+		 * measured by minDepth.
+		 */
+		long positionCovLost, positionCovGained, locusCount = 0;
+		
+		while(iter.hasNext()){
+
+			locus = iter.next();
+				
+			currLocusInterval =
+					LocusInfoQueue.generateHumanGenomeRefIntervalByMass(locus);
+			
+			/* At every locus, check if a mass of reads are out of order
+			 * between the previous and current locus
+			 */
+			inOrder = LocusInfoQueue.
+						intervalsOrderedNonOverlapping(prevLocusInterval,
+								currLocusInterval);
+		
+			/* If out of order, determine whether it's a deletion or
+			 * translocation.
+			 */
+			if(!inOrder){
+
+				/* If prev is before curr, we'll assume it's a deletion, unless
+				 * we find it's a translocation, later.
+				 */
+				if(prevLocusInterval.compareTo(currLocusInterval) <= 0){
+					
+				}
+				else{
+					preList.push(prevLocusInterval);
+					postList.push(currLocusInterval);
+					resolveAllStructuralVariantsInRegion(iter);
+					
+					if(!preList.isEmpty() || !postList.isEmpty() ||
+							!deletionPreList.isEmpty() ||
+							!deletionPostList.isEmpty() ||
+							!deletionVarList.isEmpty()){
+						
+						throw new RuntimeException("ERROR: all stacks should be"
+								+ " empty. Something is very wrong!\nPreStack: "
+								+ preList.toString() + "\n\nPostStack: " 
+								+ postList.toString() + "\n\nDeletionPreStack: "
+								+ deletionPreList.toString() + "\n\nDeletionPostStack: "
+								+ deletionPostList.toString() + "\n\nDeletionVarStack: "
+								+ deletionVarList.toString());
+					}
+				}
+		
+			}
+
+			/* Every (MAXSIZE/2) loci, check for a mass of reads that are
+			 * out of order.
+			 */
+//			if(locusCount++ % (MAXSIZE/2) == 0){
+//				
+//				/* If the running LocusInfoQueue is out of order, there
+//				 * may be a deletion or translocation.
+//				 */
+//				ArrayList<Interval> orderBreakingLoci =
+//						running_liq.intervalsOrderedNonOverlapping();
+//				if(orderBreakingLoci.size() > 0){
+//					
+//					for(int i = 0; i < orderBreakingLoci.size(); i += 2){
+//						orderBreakingLoci.get(i).
+//					}
+//				}
+//			}
+
+			int depth = locus.getRecordAndPositions().size();
+
+			/* If we drop below acceptable coverage, we're looking at a
+			 * possible insertion, duplication, or inversion. Go until
+			 * we rise above. Duplications are caught here because we're
+			 * filtering reads with mapQ < StructuralVariantCaller.minMapQual.
+			 * Reads mapped to a duplication will have a mapQ == 0 because the
+			 * mapQ is set to 0 if a given read can map to two locations equally
+			 * well.
+			 */
+			if(depth < StructuralVariantCaller.minDepth){
+				
+				/* Create new LIQ for the low coverage region.
+				 * No max size.
+				 */
+//				possibleVarLiq =
+//						new LocusInfoQueue(StructuralVariantCaller.minSVSize);
+//				possibleVarLiq.add(locusInfo);
+
+				positionCovLost = locus.getPosition();
+				
+				/* Keep iterating until we rise above minDepth */
+				while(iter.hasNext()){
+					locus = iter.next();
+					if(depth >= StructuralVariantCaller.minDepth){
+						positionCovGained = locus.getPosition();
+
+						logger.debug("Potential insertion/inversion/duplication between: " +
+								positionCovLost + " and " + positionCovGained +
+								"; Depth: " + depth);
+
+						break;
+					}
+					else{
+//						possibleVarLiq.add(locusInfo);
+					}
+				}
+
+			}
+			else{
+				/* Only add the locus if it has acceptable coverage */
+//				running_liq.add(locusInfo);
+			}
+			
+			prevLocusInterval = currLocusInterval;
+
+		}
+
+		sli.close();
 	}
 	
-	public void startWalking(final File samFile, final File outVCF,
-			File sampleRef, final int minSVSize, final int minMapQual,
-			final int minDepth, final ValidationStringency vs)
+
+	/**
+	 * @param iter
+	 */
+	private void resolveAllStructuralVariantsInRegion(
+			Iterator<SamLocusIterator.LocusInfo> iter){
+
+		
+		/* These locus Intervals are in context of the reference genome.
+		 * We use the reference segment's original location (read name)
+		 * to determine the locus interval.
+		 */
+		Interval refStartInterval, refEndInterval, varStartInterval,
+					varEndInterval, pre, post;
+
+		VariantContext var;
+		
+		pre = preList.peek();
+		post = postList.peek();
+		
+		/* If prev is before curr, we'll assume it's a deletion, unless
+		 * we find it's a translocation, later. We must already be in a
+		 * variant where an end order-breaking
+		 * boundary exists, so call it a deletion, push it on the stack,
+		 * and proceed. 
+		 */
+		if(pre.getContig().equals(post.getContig())
+				&& pre.getEnd() < post.getStart()){
+
+			var = buildVariant(this.referenceReader, this.header,
+					pre.getContig(),
+					pre.getStart(),
+					post.getStart(),
+					pre.getStart(),
+					pre.getStart());
+
+			deletionVarList.push(var);
+
+			/* Have to pop so we don't get in an infinite loop,
+			 * but track these in case they're actually a translocation.
+			 */
+			deletionPreList.push(preList.pop());
+			deletionPostList.push(postList.pop());
+			
+			/* keep resolving */
+			resolveAllStructuralVariantsInRegion(iter);
+		}
+		else{ // Must be translocation, run until we return to prevLocusInterval
+			
+			ArrayList<Interval> orderBreakingBoundary =
+					walkToNextOrderBreakingBoundary(iter);
+
+			pre = orderBreakingBoundary.get(0);
+			post = orderBreakingBoundary.get(1);
+
+			/* If the 'post' interval (the right side of the next
+			 * order-breaking boundary) is "in order" with the 
+			 * the previous 'pre' interval, then we've found the
+			 * end of this variant.
+			 */
+			for(int i = preList.size() - 1; i >= 0; i--){
+
+				if(LocusInfoQueue.intervalsOrderedNonOverlapping(
+								this.preList.get(i), post)){
+					
+					/* If the deletionPostStack.peek() is lexicographically before
+					 * pre, then this must have been another translocation, not a
+					 * deletion. The deletionPostStack would actually mark the
+					 * beginning of the translocation, because it was the 'post'
+					 * position of that boundary.
+					 */
+					if(deletionPostList.peek().compareTo(pre) <= 0){
+						varStartInterval = deletionPostList.pop();
+						varEndInterval = pre;
+						refStartInterval = deletionPreList.pop();
+						refEndInterval = refStartInterval;
+						var = buildVariant(this.referenceReader, this.header,
+								refStartInterval.getContig(),
+								refStartInterval.getStart(), 
+								refEndInterval.getStart(),
+								varStartInterval.getStart(),
+								varEndInterval.getStart());
+						this.vw.writeVariantToVCF(var);
+						
+						deletionVarList.pop(); // get rid of the false deletion
+
+					}
+					
+					/* Create and write the variant */
+					varStartInterval = this.postList.get(i);
+					varEndInterval = pre;
+					refStartInterval = this.preList.get(i);
+					refEndInterval = refStartInterval;
+					var = buildVariant(this.referenceReader, this.header,
+							refStartInterval.getContig(),
+							refStartInterval.getStart(), 
+							refEndInterval.getStart(),
+							varStartInterval.getStart(),
+							varEndInterval.getStart());
+					this.vw.writeVariantToVCF(var);
+				}
+				else{
+					preList.push(pre);
+					postList.push(post);
+					resolveAllStructuralVariantsInRegion(iter);
+				}
+			}
+		}
+	}
+	
+	/**
+	 * Walk until we hit another order-breaking boundary and return
+	 * the two intervals (positions) that are out of order. Or return
+	 * null if we never find one.
+	 * 
+	 * @param iter
+	 * @return
+	 */
+	private ArrayList<Interval> walkToNextOrderBreakingBoundary(
+			Iterator<SamLocusIterator.LocusInfo> iter){
+
+		LocusInfo locus;
+
+		/* These locus Intervals are in context of the reference genome.
+		 * We use the reference segment's original location (read name)
+		 * to determine the locus interval.
+		 */
+		Interval prevLocusInterval = null, currLocusInterval;
+		
+		boolean inOrder;
+		
+		while(iter.hasNext()){
+			locus = iter.next();
+			currLocusInterval = 
+					LocusInfoQueue.generateHumanGenomeRefIntervalByMass(locus);
+			
+			/* Check if currLocusInterval is out of order
+			 * with prevLocusInterval
+			 */
+			inOrder = LocusInfoQueue.
+					intervalsOrderedNonOverlapping(
+							prevLocusInterval, currLocusInterval);
+			
+			if(!inOrder){
+				ArrayList<Interval> orderBreakingIntervals = new ArrayList<Interval>();
+				orderBreakingIntervals.add(prevLocusInterval);
+				orderBreakingIntervals.add(currLocusInterval);
+				return orderBreakingIntervals;
+			}
+			prevLocusInterval = currLocusInterval;
+		}
+		
+		/* We went to the end of the contig without hitting a new boundary */
+		return null;
+	}
+	
+	public void startWalking()
 			throws StructuralVariantCallerException, IOException{
 		
-		SamReader reader = openSam(samFile, vs);
-        final SAMFileHeader header = reader.getFileHeader();
 
+//        DiskBasedBAMFileIndex dbfi = new DiskBasedBAMFileIndex(new File(samFile.getAbsoluteFile() + ".bai"),
+//        		header.getSequenceDictionary());
+        
         if (header.getSortOrder() != SortOrder.coordinate) {
         	throw new StructuralVariantCallerException("Input file " +
         			samFile.getAbsolutePath() + " is not coordinate sorted.");
@@ -66,16 +451,8 @@ public class StructuralVariantCaller {
         ArrayList<SAMRecord> clippedEnds = new ArrayList<SAMRecord>(anticipatedDepth);
         
         LocusCoverageQueue runningDepth = new LocusCoverageQueue();
-        
-        TreeSet<String> samples = new TreeSet<String>();
-        for(SAMReadGroupRecord group : header.getReadGroups()){
-        	samples.add(group.getSample());
-        }
 
-        VCFWriter vw = new VCFWriter(outVCF, sampleRef, samples);
-        
-        IndexedFastaSequenceFile referenceReader = new IndexedFastaSequenceFile(sampleRef);
-        
+
         boolean potentialSV = false;
 
 
@@ -86,27 +463,46 @@ public class StructuralVariantCaller {
 //        }
 
         /* Iterate over the records */
+        int count = 0;
         while(samIt.hasNext()){
         	tmpRec = samIt.next();
+        	count++;
+        	
+        	if(count % 10000000 == 0){
+        		logger.debug("Assessed " + count + " reads.");
+        	}
+        	
+//        	Integer as = (Integer) tmpRec.getAttribute("AS");
+//        	Integer xs = (Integer) tmpRec.getAttribute("XS");
+//        	
+//        	if(xs != null){
+//        		logger.debug("AS: " + as);
+//        		logger.debug("XS: " + xs);
+//        	}
         	
         	/* only consider reads if they are mapped and have mapping quality
         	 * greater than the minimum.
+        	 * 
+        	 * TODO: look for any regions where there's a bunch of reads aligning
+        	 * to the '-' strand. What would it mean?
         	 */
         	if(!tmpRec.getReadUnmappedFlag()
-        			&& tmpRec.getMappingQuality() > minMapQual){
+        			/* && !tmpRec.getReadNegativeStrandFlag() */
+        			/* && tmpRec.getMappingQuality() > minMapQual */){
         		
         		currRec = tmpRec;
         		
-        		if(currRec.getAlignmentStart() % 100000 == 0){
-					logger.debug(currRec.toString());
+        		if(currRec.getAlignmentStart() % 10000000 == 0){
+					logger.debug(currRec.toString() + " Aligned at start = "
+							+ currRec.getAlignmentStart());
         		}
 //				currRecRs = new ReferenceSegment(currRec.getReadName());
 				
-        		/* Do I ever clear this? */
+        		/* TODO: Do I ever clear this? */
         		runningDepth.addCoverageForRead(currRec);
 				
 				/* Store reads where the ends are clipped until we see a read
-				 * that is unclipped, UNLESS we are starting to see reads where
+				 * that is unclipped, UNLESS we start seeing reads where
 				 * the start is clipped. Ignore any reads where both ends are
 				 * clipped. Probably misaligned.
 				 * 
@@ -162,24 +558,12 @@ public class StructuralVariantCaller {
 
 					int start = boundaries[0], end = boundaries[1];
 
-					if(start != -1){
+					/* Ignore if the boundaries are not greater than 0 */
+					if(start >= 0){
 						
-						ArrayList<Allele> alleles = new ArrayList<Allele>();
-						Allele ref = Allele.create(referenceReader.getSubsequenceAt(currRec.getContig(), start-1, start-1).getBases(), true);
-						Allele alt = Allele.create(referenceReader.getSubsequenceAt(currRec.getContig(), start, end).getBases(), false);
-						alleles.add(ref);
-						alleles.add(alt);
-						
-						GenotypesContext gc = GenotypesContext.create(new GenotypeBuilder(header.getReadGroups().get(0).getSample(), alleles).make());
-						
-						VariantContextBuilder vcBuilder = new VariantContextBuilder();
-						vcBuilder.chr(currRec.getContig());
-						vcBuilder.start(start);
-						vcBuilder.stop(start);
-						vcBuilder.alleles(alleles);
-						vcBuilder.genotypes(gc);
-						
-						vw.writeVariantToVCF(vcBuilder.make());
+						vw.writeVariantToVCF(buildVariant(referenceReader,
+								header, currRec.getContig(), start-1, start-1, 
+								start-1, end));
 						
 						logger.debug(
 								"\n#################################################\n" +
@@ -221,6 +605,56 @@ public class StructuralVariantCaller {
         }
         
 		referenceReader.close();
+	}
+	
+	/**
+	 * Build a VariantContext object based on the reference genome. Will return
+	 * null if an 'N' is found in either the reference or alternate alleles.
+	 * 
+	 * @param referenceReader
+	 * @param header
+	 * @param currRec
+	 * @param start
+	 * @param end
+	 * @return
+	 */
+	private VariantContext buildVariant(IndexedFastaSequenceFile referenceReader,
+			SAMFileHeader header, String contig, int refStart, int refEnd,
+			int altStart, int altEnd){
+
+		/*
+		 * TODO: 
+		 * 1. Convert to b37 positions and write a VCF with
+		 * those positions?
+		 * 2. If #1, get the b37 positions. Use the read names
+		 * to get this? Search for sequence in b37?
+		 * 3. Get correct genotypes based on percentages (90/10).
+		 * This will require figuring out both haplotypes in the
+		 * assembly
+		 */
+		ArrayList<Allele> alleles = new ArrayList<Allele>();
+		Allele ref = Allele.create(
+				referenceReader.getSubsequenceAt(contig, refStart, refEnd).getBases(), true);
+		Allele alt = Allele.create(
+				referenceReader.getSubsequenceAt(contig, altStart, altEnd).getBases(), false);
+		
+		/* Ignore any regions containing "N"s. */
+		if(ref.getBaseString().contains("N") || alt.getBaseString().contains("N")){
+			return null;
+		}
+		alleles.add(ref);
+		alleles.add(alt);
+		
+		GenotypesContext gc = GenotypesContext.
+				create(new GenotypeBuilder(header.getReadGroups().get(0).getSample(), alleles).make());
+		
+		return new VariantContextBuilder()
+			.chr(contig)
+			.start(refStart)
+			.stop(refEnd)
+			.alleles(alleles)
+			.genotypes(gc)
+			.make();
 	}
 	
     /**
@@ -296,19 +730,16 @@ public class StructuralVariantCaller {
     	if(leftBoundaries.length > 0){
 		    DescriptiveStatistics endsStats =
 				    new DescriptiveStatistics(leftBoundaries);
-		    double endsMin = endsStats.getMin();
-		    double endsMax = endsStats.getMax();
 		    endsSD = endsStats.getStandardDeviation();
 		    endsMean = endsStats.getMean();
-		    double endsSkewness = endsStats.getSkewness();
 		    
-		    if(endsSD <= 5){
-			    logger.debug("\nLeft boundary stats: \nRange: " + endsMin + "-" + endsMax
-					    + "\nMean (Stand. Dev.): " + endsMean + " (" + endsSD + ")"
-					    + "\nSkewness: " + endsSkewness
-					    + "\nRecs: " + clippedEnds.toString() + "\n");
-			    System.out.println("");
-		    }
+//		    if(endsSD <= 5){
+//			    logger.debug("\nLeft boundary stats: \nRange: " + endsMin + "-" + endsMax
+//					    + "\nMean (Stand. Dev.): " + endsMean + " (" + endsSD + ")"
+//					    + "\nSkewness: " + endsSkewness
+//					    + "\nRecs: " + clippedEnds.toString() + "\n");
+//			    System.out.println("");
+//		    }
     	}
     	
     	if(rightBoundaries.length > 0){
@@ -318,19 +749,16 @@ public class StructuralVariantCaller {
 
 		     DescriptiveStatistics startsStats =
 				    new DescriptiveStatistics(rightBoundaries);
-			double startsMin = startsStats.getMin();
-			double startsMax = startsStats.getMax();
 			startsSD = startsStats.getStandardDeviation();
 			startsMean = startsStats.getMean();
-			double startsSkewness = startsStats.getSkewness();
 		    
-		    if(startsSD <= 5){
-			    logger.debug("\nRight boundary stats: \nRange: " + startsMin + "-" + startsMax
-					    + "\nMean (Stand. Dev.): " + startsMean + " (" + startsSD + ")"
-					    + "\nSkewness: " + startsSkewness
-					    + "\nRecs: " + clippedStarts.toString() + "\n");
-			    System.out.println("");
-		    }
+//		    if(startsSD <= 5){
+//			    logger.debug("\nRight boundary stats: \nRange: " + startsMin + "-" + startsMax
+//					    + "\nMean (Stand. Dev.): " + startsMean + " (" + startsSD + ")"
+//					    + "\nSkewness: " + startsSkewness
+//					    + "\nRecs: " + clippedStarts.toString() + "\n");
+//			    System.out.println("");
+//		    }
     	}
   
     	int[] boundaries = new int[]{-2, -2};
@@ -341,26 +769,36 @@ public class StructuralVariantCaller {
 	    /* if we get a startsMean but not an ends mean, start at startsMean
 	     * and go backwards until you hit a lot of coverage.
 	     */
-	    if(startsMean != 0 && endsMean == 0){
+	    if(startsSD < MAX_STD_DEV && startsMean != 0 && endsMean == 0){
 		    boundaries = getSVBoundaries(lcq, new Double(startsMean).intValue(),
 				    new Double(endsMean).intValue());
 	    }
-	    /* do the opposite, but go until the start of the next read. */
-	    else if(startsMean == 0 && endsMean != 0){
+	    /* else, if we have an ends mean, but no starts mean, do the opposite.
+	     * but go until the start of the next read.
+	     */
+	    else if(startsMean == 0 && endsSD < MAX_STD_DEV && endsMean != 0){
 		    boundaries = getSVBoundaries(lcq, new Double(endsMean).intValue(),
 				    new Double(currRec.getAlignmentStart()).intValue());
 	    }
 	    /* if we get both, check coverage across the defined region. */
-	    if(startsMean != 0 && endsMean != 0){
+	    if(startsSD < MAX_STD_DEV && startsMean != 0 &&
+	    		endsSD < MAX_STD_DEV && endsMean != 0){
+
 		    /* TODO: require running average to be below some value? Look for bowl? */
 		    boundaries = getSVBoundaries(lcq, new Double(endsMean).intValue(),
 				    new Double(startsMean).intValue());
 	    }
 		    
-		logger.debug("Boundaries: " + boundaries[0] + " to " + boundaries[1]);
+	    if(boundaries[0] >= 0 && boundaries[1] >= 0){
+			logger.debug("Boundaries: " + boundaries[0] + " to " + boundaries[1]);
+	    }
 		if((boundaries[0] == -1 && boundaries[1] != -1) ||
 				(boundaries[0] != -1 && boundaries[1] == -1)){
 			throw new RuntimeException("Found one boundary, but not the other!");
+		}
+		
+		if(boundaries[0] == 267510){
+			logger.debug("here");
 		}
     	
     	return boundaries;
@@ -428,6 +866,12 @@ public class StructuralVariantCaller {
     	 */
     	return new int[]{leftBoundary, rightBoundary};
     }
+
+//	@Override
+//	public void run() {
+//		// TODO Auto-generated method stub
+//		
+//	}
     
 
 }

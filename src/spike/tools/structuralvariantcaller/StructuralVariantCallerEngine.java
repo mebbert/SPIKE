@@ -89,7 +89,7 @@ public class StructuralVariantCallerEngine implements Engine {
 				.addArgument("-m", "--min-mapping-quality")
 				.dest("MinMapQual")
 				.metavar("QUAL")
-				.setDefault(30)
+				.setDefault(1)
 				.type(Integer.class)
 				.help("The minimum mapping quality to consider a given"
 						+ " read.");
@@ -147,21 +147,30 @@ public class StructuralVariantCallerEngine implements Engine {
 			vs = ValidationStringency.SILENT;
 		}
 		
-		// Start doing your thing.
-		StructuralVariantCaller svc = new StructuralVariantCaller();
 		try {
-			svc.startWalking(new File(sam), new File(vcf), new File(sampleRef),
-					minSVSize, minMapQual, minDepth, vs);
-		} catch (StructuralVariantCallerException e) {
-			UtilityBelt.printErrorUsageHelpAndExit(parser, logger, e);
+			// Do your thing.
+			StructuralVariantCaller svc = new StructuralVariantCaller(new File(sam),
+					new File(vcf), new File(sampleRef), minSVSize, minMapQual,
+					minDepth, vs);
+
+			svc.startWalkingByLocus();
+
 		} catch (FileNotFoundException e) {
 			UtilityBelt.printErrorUsageHelpAndExit(parser, logger, e);
-		} catch(IOException e){
-			UtilityBelt.printErrorUsageHelpAndExit(parser, logger, e);
-		} catch (Exception e){
-			logger.error("Caught unexpected exception, something is very wrong!");
-			e.printStackTrace();
 		}
+
+//		try {
+//			svc.startWalking();
+//		} catch (StructuralVariantCallerException e) {
+//			UtilityBelt.printErrorUsageHelpAndExit(parser, logger, e);
+//		} catch (FileNotFoundException e) {
+//			UtilityBelt.printErrorUsageHelpAndExit(parser, logger, e);
+//		} catch(IOException e){
+//			UtilityBelt.printErrorUsageHelpAndExit(parser, logger, e);
+//		} catch (Exception e){
+//			logger.error("Caught unexpected exception, something is very wrong!");
+//			e.printStackTrace();
+//		}
 
 	}
 
