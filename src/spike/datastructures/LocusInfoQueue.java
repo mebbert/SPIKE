@@ -73,20 +73,20 @@ public class LocusInfoQueue {
 	 * @param chromPos
 	 * @param depth
 	 */
-	public Interval add(LocusInfo locusInfo) {
-		this.locusInfoList.add(locusInfo);
-
-		Interval interval = generateHumanGenomeRefIntervalByMass(locusInfo);
-		if(interval != null) this.humanGenRefIntervalListByMass.add(interval);
-		
-		if(LocusInfoQueue.MAXSIZE > -1 &&
-				locusInfoList.size() > LocusInfoQueue.MAXSIZE){
-			this.locusInfoList.remove();
-			this.humanGenRefIntervalListByMass.remove();
-		}
-		
-		return interval;
-	}
+//	public Interval add(LocusInfo locusInfo) {
+//		this.locusInfoList.add(locusInfo);
+//
+//		Interval interval = generateHumanGenomeRefIntervalByMass(locusInfo);
+//		if(interval != null) this.humanGenRefIntervalListByMass.add(interval);
+//		
+//		if(LocusInfoQueue.MAXSIZE > -1 &&
+//				locusInfoList.size() > LocusInfoQueue.MAXSIZE){
+//			this.locusInfoList.remove();
+//			this.humanGenRefIntervalListByMass.remove();
+//		}
+//		
+//		return interval;
+//	}
 	
 	
 	/**
@@ -94,17 +94,23 @@ public class LocusInfoQueue {
 	 * interval positions will be adjusted for the human reference genome.
 	 * The interval at this locus is based on the most common reference
 	 * genome position, based on the reference segments origin in the 
-	 * reference genome.
+	 * reference genome. The second will be null if it does not constitute
+	 * at least 25% of the mass.
 	 * 
-	 * @return
+	 * @return ArrayList<Interval> of the top two intervals, or null if
+	 * there is a tie.
 	 */
-	public static Interval generateHumanGenomeRefIntervalByMass(LocusInfo locus){
+	public static ArrayList<Interval> generateHumanGenomeRefIntervalByMass(LocusInfo locus){
+		
+		/* TODO: When calculating interval by mass, I need the reads
+		 * that have gaps at this location! They are not being included!
+		 * Or are the positions at gaps not getting calculated properly?
+		 */
 		
 		String hgRefLocation, hgRefContig;
 		int hgRefStart, hgRefPos;
-		Pattern p = Pattern.compile("(\\s*\\d*)\\[(\\d+)-\\d+\\]");
+		Pattern p = Pattern.compile("(\\s*\\d+)\\[(\\d+)-\\d+\\]");
 		Matcher m;
-		Interval interval;
 
 		List<RecordAndOffset> raoList = locus.getRecordAndPositions();
 		
@@ -113,9 +119,15 @@ public class LocusInfoQueue {
 			hgRefLocation = rao.getRecord().getReadName();
 			
 			/* Ignore reads on negative strand */
-			if(rao.getRecord().getMateNegativeStrandFlag()) continue;
+			if(rao.getRecord().getReadNegativeStrandFlag()) continue;
 			
 			m = p.matcher(hgRefLocation);
+
+			if(!m.matches()){
+				throw new RuntimeException("ERROR: All read names should match"
+						+ "the regular expression. This one failed: "
+						+ hgRefLocation);
+			}
 
 			hgRefContig = m.group(1);
 			hgRefStart = Integer.parseInt(m.group(2));
@@ -130,16 +142,33 @@ public class LocusInfoQueue {
 		
 		/* Count the frequency for each value in the lists using lambda functions */
 		Map<Object, Long> posFreqs = 
-				  hgRefPosList.stream().collect(Collectors.groupingBy(w -> w, Collectors.counting()));
+				  hgRefPosList.stream().collect(Collectors.groupingBy(w -> w,
+						  Collectors.counting()));
 		
-		String commonPosStr = (String) LocusInfoQueue.getMostCommonValue(posFreqs);
+		ArrayList<String> commonPosStr = (ArrayList<String>) LocusInfoQueue.getMostCommonValues(posFreqs);
 		if(commonPosStr != null){
+
+			ArrayList<Interval> topTwo = new ArrayList<Interval>();
+
 			/* This interval will start and end at the same position */
-			String[] commonContigPos = commonPosStr.split(":");
-			interval = new Interval(commonContigPos[0],
-					Integer.parseInt(commonContigPos[1]),
-					Integer.parseInt(commonContigPos[1]));
-			return interval;
+			String[] commonContigPos1 = commonPosStr.get(0).split(":");
+			Interval topInterval = new Interval(commonContigPos1[0],
+					Integer.parseInt(commonContigPos1[1]),
+					Integer.parseInt(commonContigPos1[1]));
+			topTwo.add(topInterval);
+
+			if(commonPosStr.get(1) != null){
+				String[] commonContigPos2 = commonPosStr.get(1).split(":");
+				Interval secondInterval = new Interval(commonContigPos2[0],
+						Integer.parseInt(commonContigPos2[1]),
+						Integer.parseInt(commonContigPos2[1]));
+				topTwo.add(secondInterval);
+			}
+			else{
+				topTwo.add(null);
+			}
+
+			return topTwo;
 		}
 		else{
 			/* There were multiple modes of the same height. Just ignore. */
@@ -212,17 +241,38 @@ public class LocusInfoQueue {
      * Borrowed and modified this code from assertOrderedNonOverlapping from
      * IntervalUtil.java in htsjdk.samtools.util. Will determine whether the
      * set of intervals are both ordered and non-overlapping. Intervals that
-     * are technically in order, but a far distance away will be considered out
-     * of order. Any sequence from a different contig is out of order.
+     * are technically in order, but farther than LocusInfoQueue.MAXDISTANCE
+     * away will be considered out of order. Any sequence from a different
+     * contig is out of order.
      * 
      * @param intervals
      * @param sequenceDictionary used to determine order of sequences
      */
     public static boolean intervalsOrderedNonOverlapping(
-    		Interval prevInterval, Interval currInterval) {
-    	   
+    		ArrayList<Interval> prevIntervals, ArrayList<Interval> currIntervals) {
+    	
+    	Interval prev1 = prevIntervals.get(0), prev2 = prevIntervals.get(1),
+    			curr1 = currIntervals.get(0), curr2 = currIntervals.get(1);
+    	
+    	if(prev1 == null || curr1 == null){
+    		throw new RuntimeException("ERROR: No primary intervals should be null");
+    	}
+    	
+    		/* Return true if any of them are ordered and overlapping */
+    		
+		return intervalsOrderedNonOverlapping(prev1, curr1)
+				|| intervalsOrderedNonOverlapping(prev1, curr2)
+				|| intervalsOrderedNonOverlapping(prev2, curr1)
+				|| intervalsOrderedNonOverlapping(prev2, curr2);
+
+    }
+    
+    
+    public static boolean intervalsOrderedNonOverlapping(Interval prevInterval,
+    		Interval currInterval){
+     	   
 		if(prevInterval == null || currInterval == null)
-			return true;
+			return false;
 		
 		/* Test if the intervals overlap 
 		 * TODO: Do we care if they intersect?
@@ -241,7 +291,7 @@ public class LocusInfoQueue {
 				> LocusInfoQueue.MAXDISTANCE){
 			return false;
 		}
-		return true;
+		return true;   	
     }
 
     /**
@@ -303,34 +353,42 @@ public class LocusInfoQueue {
 // 
     
     /**
-     * Determine which object has the highest count. If multiple have the
-     * highest (i.e., they're equal), return null.
+     * Determine which object has the highest count. Return the top two IF
+     * the second is at least 25% of the mass.
      * 
      * @param freqs
      * @return
      */
-    private static Object getMostCommonValue(Map<Object, Long> freqs){
+    private static ArrayList<String> getMostCommonValues(Map<Object, Long> freqs){
     	Iterator<Object> it = freqs.keySet().iterator();
-    	Object o, mostCommon = null;
-    	long count, secondMax = 0, max = 0;
+    	String o, mostCommon = null, secondCommon = null;
+    	long count, secondMax = 0, max = 0, totalCount = 0;
+
+    	double secondMaxProportion = 0.25;
+
     	while(it.hasNext()){
-    		o = it.next();
+    		o = (String) it.next();
     		count = freqs.get(o);
+    		totalCount += count;
     		if(count > max){
+    			secondMax = max;
     			max = count;
+    			secondCommon = mostCommon;
     			mostCommon = o;
-    		}
-    		/* If count ever equals existing max, track it. */
-    		else if(count == max){
-    			secondMax = count;
     		}
     	}
     	
-    	if(max > secondMax){
-    		return mostCommon;
-    	}
-    	else if(max == secondMax){
-    		return null;
+    	if(max >= secondMax){
+    		ArrayList<String> topTwo = new ArrayList<String>();
+    		topTwo.add(mostCommon);
+    		
+    		if(secondMax / totalCount >= secondMaxProportion){
+				topTwo.add(secondCommon);
+    		}
+    		else{
+    			topTwo.add(null);
+    		}
+    		return topTwo;
     	}
     	else{
     		throw new RuntimeException("ERROR: Max count should never be less"
