@@ -5,7 +5,6 @@ package spike.tools.structuralvariantcaller;
 
 import htsjdk.samtools.SAMFileHeader;
 import htsjdk.samtools.SAMReadGroupRecord;
-import htsjdk.samtools.SAMRecord;
 import htsjdk.samtools.SamReader;
 import htsjdk.samtools.SamReaderFactory;
 import htsjdk.samtools.ValidationStringency;
@@ -31,10 +30,8 @@ import java.util.List;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
-import org.apache.commons.math3.stat.descriptive.DescriptiveStatistics;
 import org.apache.log4j.Logger;
 
-import spike.datastructures.LocusCoverageQueue;
 import spike.datastructures.LocusInfoQueue;
 
 /**
@@ -44,7 +41,6 @@ import spike.datastructures.LocusInfoQueue;
 public class StructuralVariantCaller /*implements Runnable*/ {
 	
 	private static Logger logger = Logger.getLogger(StructuralVariantCaller.class);
-	private static final int MAX_STD_DEV = 5;
 	private static int minDepth;
 	private static int minSVSize;
 	private static int minMapQual;
@@ -613,74 +609,6 @@ public class StructuralVariantCaller /*implements Runnable*/ {
         
         return reader;
     }
-
-    
-    /**
-     * Calculate the left and right boundaries for the structural variant.
-     * 
-     * @param lcq
-     * @param start
-     * @param end
-     * @return the left and right boundaries for the variant, or {-1, -1} if not
-     * found
-     */
-    private int [] getSVBoundaries(LocusCoverageQueue lcq, int start, int end){
-
-    	
-    	/* TODO: Make this method call boundaries by majority. Genotype? 90/10 */
-    	
-    	int leftBoundary = -1, rightBoundary = -1;
-    	
-    	if(start < end){
-    		
-    		/* go from start to end (incrementing). The first gap is the left
-    		 * boundary. Once you have a left boundary and then hit where there
-    		 * is coverage, that's the right boundary.
-    		 */
-    		for(int i = start; i <= end; i++){ // less than or equal to. Include the next reads position
-			    if(i - start > 5 && leftBoundary == -1){  /* quit if no coverage gap within 5 bases */
-				    return new int[]{leftBoundary, rightBoundary};
-			    }
-			    else if(lcq.hasCoverageGap(i) && leftBoundary == -1){
-				    leftBoundary = i;
-			    }
-			    else if(leftBoundary != -1 && !lcq.hasCoverageGap(i)){
-				    rightBoundary = i - 1; // Take the position before
-
-				    /* return immediately */
-				    return new int[]{leftBoundary, rightBoundary};
-			    }
-    		}
-    	}
-    	else{
-    		for(int i = start; i > end; i--){
-			    if(start - i > 5 && rightBoundary == -1){  /* quit if no coverage gap within 5 bases */
-				    return new int[]{leftBoundary, rightBoundary};
-			    }
-			    else if(lcq.hasCoverageGap(i) && rightBoundary == -1){
-				    rightBoundary = i;
-			    }
-			    else if(rightBoundary != -1 && !lcq.hasCoverageGap(i)){
-				    leftBoundary = i + 1;
-				    
-				    /* return immediately */
-				    return new int[]{leftBoundary, rightBoundary};
-    			}
-    		}
-    	}
-    	
-    	/* This will only happen when we start and end have a distance less 
-    	 * than 5. e.g., if we have a "wall" of reads clipped at the ends and
-    	 * the next read is less than 5 bps away.
-    	 */
-    	return new int[]{leftBoundary, rightBoundary};
-    }
-
-//	@Override
-//	public void run() {
-//		// TODO Auto-generated method stub
-//		
-//	}
-    
+   
 
 }
