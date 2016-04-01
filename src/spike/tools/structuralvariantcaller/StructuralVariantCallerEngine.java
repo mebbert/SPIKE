@@ -111,6 +111,28 @@ public class StructuralVariantCallerEngine implements Engine {
 				.type(Integer.class)
 				.help("The minimum depth required to identify a structural"
 						+ " variant.");
+		
+		svcOptions
+				.addArgument("-e", "--expected-coverage")
+				.dest("ExpectedCoverage")
+				.metavar("EXPCOV")
+				.setDefault(200)
+				.type(Integer.class)
+				.help("The expected coverage for a given base. Regions"
+						+ " with excessive coverage require tender love"
+						+ " and care. Excessive coverage originates from"
+						+ " reference segments from multiple regions of"
+						+ " the genome aligning to the same spot.");
+		
+		svcOptions
+				.addArgument("-c", "--max-clip")
+				.dest("CLIP")
+				.setDefault(50)
+				.type(Integer.class)
+				.help("Filter reads that have this many soft-clipped bases,"
+						+ " or more. This cannot be too small, or certain"
+						+ " variants (insertions, copy gains, inversions)"
+						+ " will be missed.");
 			
 		svcOptions
 				.addArgument("-v", "--validation-stringency")
@@ -139,11 +161,13 @@ public class StructuralVariantCallerEngine implements Engine {
 		String sam = parsedArgs.getString("SAM");
 		String vcf = parsedArgs.getString("VCF");
 		String sampleRef = parsedArgs.getString("REF");
-		String hgRef = parsedArgs.getString("REF");
+		String hgRef = parsedArgs.getString("HG_REF");
 
 		int minSVSize = parsedArgs.getInt("MIN_SIZE");
 		int minMapQual = parsedArgs.getInt("MinMapQual");
 		int minDepth = parsedArgs.getInt("MinDepth");
+		int expectedCoverage = parsedArgs.getInt("ExpectedCoverage");
+		int maxClip = parsedArgs.getInt("CLIP");
 		String stringency = parsedArgs.getString("STRINGENCY");
 		ValidationStringency vs = null;
 		
@@ -158,10 +182,19 @@ public class StructuralVariantCallerEngine implements Engine {
 		}
 		
 		try {
+
+			/* Calculate the max acceptable coverage. What proportion
+			 * above expected coverage is excessive?
+			 */
+			double maxProportion = 1.5;
+			int maxAcceptableCoverage =
+					new Double(expectedCoverage * maxProportion).intValue();
+
 			// Do your thing.
 			StructuralVariantCaller svc = new StructuralVariantCaller(new File(sam),
 					new File(vcf), new File(sampleRef), new File(hgRef),
-					minSVSize, minMapQual, minDepth, vs);
+					minSVSize, minMapQual, minDepth, maxAcceptableCoverage, 
+					maxClip, vs);
 
 			svc.startWalkingByLocus();
 
