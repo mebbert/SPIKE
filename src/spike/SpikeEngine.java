@@ -10,6 +10,7 @@ import net.sourceforge.argparse4j.inf.Namespace;
 
 import org.apache.log4j.Logger;
 
+import spike.tools.referencesegmentgenerator.ReferenceSegmentGeneratorEngine;
 import spike.tools.structuralvariantcaller.StructuralVariantCallerEngine;
 
 /**
@@ -55,7 +56,11 @@ public class SpikeEngine implements Engine {
 			}
 			
 			/* Determine which tool was specified and call it */
-			if(tool == KnownTools.ALIGNER){
+			if(tool == KnownTools.REFERENCE_SEGMENT_GENERATOR){
+				ReferenceSegmentGeneratorEngine rsg = new ReferenceSegmentGeneratorEngine(toolArgs);
+				rsg.generateSegments();
+			}
+			else if(tool == KnownTools.ALIGNER){
 //				AlignerEngine ale = new AlignerEngine(toolArgs);
 //				ale.align();
 			}

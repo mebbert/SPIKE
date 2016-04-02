@@ -143,7 +143,7 @@ public class StructuralVariantCallerEngine implements Engine {
 				.help("The validation stringency when parsing a SAM/BAM"
 						+ " file. 'STRICT' will throw errors if something "
 						+ " is amiss, 'LENIENT' will give warnings but continue,"
-						+ " and 'SILENT' will continue and keep our mouth shut.");
+						+ " and 'SILENT' will continue AND keep our mouth shut.");
 		
 		
 		
@@ -200,6 +200,9 @@ public class StructuralVariantCallerEngine implements Engine {
 
 		} catch (FileNotFoundException e) {
 			UtilityBelt.printErrorUsageHelpAndExit(parser, logger, e);
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
 		}
 
 //		try {

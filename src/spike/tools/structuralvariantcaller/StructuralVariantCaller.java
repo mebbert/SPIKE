@@ -6,7 +6,6 @@ package spike.tools.structuralvariantcaller;
 import htsjdk.samtools.SAMFileHeader;
 import htsjdk.samtools.SAMReadGroupRecord;
 import htsjdk.samtools.SamReader;
-import htsjdk.samtools.SamReaderFactory;
 import htsjdk.samtools.ValidationStringency;
 import htsjdk.samtools.filter.MappingQualityFilter;
 import htsjdk.samtools.filter.SamRecordFilter;
@@ -18,8 +17,13 @@ import htsjdk.variant.variantcontext.GenotypesContext;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.VariantContextBuilder;
 
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
@@ -31,9 +35,9 @@ import java.util.TreeSet;
 import org.apache.log4j.Logger;
 
 import spike.datastructures.LocusInfoQueue;
-import spike.datastructures.OverclippedReadFilter;
 import spike.datastructures.SamLocusIterator;
 import spike.datastructures.SamLocusIterator.LocusInfo;
+import spike.tools.utilitybelt.UtilityBelt;
 
 /**
  * @author markebbert
@@ -101,7 +105,7 @@ public class StructuralVariantCaller /*implements Runnable*/ {
 		this.hgRefReader =
 				new IndexedFastaSequenceFile(hgRef);
 
-		this.reader = openSam(samFile,
+		this.reader = UtilityBelt.openSam(samFile,
 				StructuralVariantCaller.samValidationStringency);
 		this.header = reader.getFileHeader();
 		
@@ -127,10 +131,9 @@ public class StructuralVariantCaller /*implements Runnable*/ {
 	 * 5. For translocations, inversions/transversions, and copy gains, the
 	 *    INFO field will also contain where in the HG Ref it
 	 *    came from.
-	 * 
-	 * @throws FileNotFoundException
+	 * @throws IOException 
 	 */
-	public void startWalkingByLocus() throws FileNotFoundException{
+	public void startWalkingByLocus() throws IOException{
 
 		SamLocusIterator sli = new SamLocusIterator(reader);
 		
@@ -206,10 +209,17 @@ public class StructuralVariantCaller /*implements Runnable*/ {
 //			}
 		}
 		
+		Writer writer = new BufferedWriter(new OutputStreamWriter(
+	              new FileOutputStream("locus_stats.txt"), "utf-8"));
+		writer.write("Position\tTotalDepth\tTopHGRefPosition\tTopHGRefCount"
+				+ "\tSecondTopHGRefPosition\tSecondTopHGRefCount");
+
+		
 		/* Get the first position and set to 'prev' */
 		if(iter.hasNext()){
 			locus = iter.next();
-			prevTopTwoHGRefLociIntervals = LocusInfoQueue.generateHumanGenomeRefIntervalByMass(locus);
+			prevTopTwoHGRefLociIntervals =
+					LocusInfoQueue.generateHumanGenomeRefIntervalByMass(locus, writer);
 		}
 		else{
 			return;
@@ -219,7 +229,7 @@ public class StructuralVariantCaller /*implements Runnable*/ {
 
 			locus = iter.next();
         	
-        	if(++count % 1000 == 0){
+        	if(++count % 10000 == 0){
         		logger.debug("Assessed " + count + " loci.");
         	}
         	
@@ -227,13 +237,14 @@ public class StructuralVariantCaller /*implements Runnable*/ {
         		logger.debug("here");
         	}
 
-			currTopTwoHGRefLociIntervals = LocusInfoQueue.generateHumanGenomeRefIntervalByMass(locus);
+			/* Get depth at this position. If there is excessive coverage,
+			 * we can't trust the data in this region.
+			 */
+			int depth = locus.getRecordAndPositions().size();
+			
+			if(depth >= maxAcceptableCoverage) continue;
 
-//			logger.debug("prev1: " + prevTopTwoHGRefLociIntervals.get(0));
-//			logger.debug("prev2: " + prevTopTwoHGRefLociIntervals.get(1));
-//
-//			logger.debug("curr1: " + currTopTwoHGRefLociIntervals.get(0));
-//			logger.debug("curr2: " + currTopTwoHGRefLociIntervals.get(1));
+			currTopTwoHGRefLociIntervals = LocusInfoQueue.generateHumanGenomeRefIntervalByMass(locus, writer);
 
 			if(currTopTwoHGRefLociIntervals == null ||
 					prevTopTwoHGRefLociIntervals == null) continue;
@@ -257,16 +268,11 @@ public class StructuralVariantCaller /*implements Runnable*/ {
 						intervalsOrderedNonOverlapping(prevTopTwoHGRefLociIntervals,
 								currTopTwoHGRefLociIntervals);
 
-			/* Get depth at this position. If there is excessive coverage,
-			 * we can't trust the data in this region.
-			 */
-			int depth = locus.getRecordAndPositions().size();
-
 		
 			/* If out of order, determine whether it's a deletion or
 			 * translocation.
 			 */
-			if(!inOrder && depth < maxAcceptableCoverage){
+			if(!inOrder){
 				
 				/* 'pre' and 'post' refer to the intervals on either side of the
 				 * order-breaking boundary. HGRef is based on the human reference
@@ -446,7 +452,7 @@ public class StructuralVariantCaller /*implements Runnable*/ {
 
 				/* The position we dropped below acceptable coverage */
 				hgRefLocusIntervalCovLost =
-						LocusInfoQueue.generateHumanGenomeRefIntervalByMass(locus)
+						LocusInfoQueue.generateHumanGenomeRefIntervalByMass(locus, writer)
 						.get(0); // We trust the first in this situation.
 				sampRefLocusIntervalCovLost = new Interval(
 								locus.getSequenceName(), locus.getPosition(),
@@ -463,7 +469,7 @@ public class StructuralVariantCaller /*implements Runnable*/ {
 	
 						locus = iter.next();
 						ArrayList<Interval> topTwo = 
-								LocusInfoQueue.generateHumanGenomeRefIntervalByMass(locus);
+								LocusInfoQueue.generateHumanGenomeRefIntervalByMass(locus, writer);
 
 						if(topTwo != null){
 							currHGRefLocusInterval = topTwo.get(0);
@@ -654,29 +660,29 @@ public class StructuralVariantCaller /*implements Runnable*/ {
 			.make();
 	}
 	
-	
-    /**
-     * 
-     * Open a SAM/BAM file for reading and return the SamReader obj
-     * 
-     * @param samFile
-     * @param vs
-     * @return SamReader
-     */
-    private SamReader openSam(final File samFile, ValidationStringency vs) {
-    	
-//    	System.setProperty("java.io.tmpdir", "");
-
-		final SamReaderFactory factory =
-		          SamReaderFactory.makeDefault()
-		              .enable(SamReaderFactory.Option.INCLUDE_SOURCE_IN_RECORDS,
-		            		  SamReaderFactory.Option.VALIDATE_CRC_CHECKSUMS)
-		              .validationStringency(vs);
-
-        final SamReader reader = factory.open(samFile);
-        
-        return reader;
-    }
+//	
+//    /**
+//     * 
+//     * Open a SAM/BAM file for reading and return the SamReader obj
+//     * 
+//     * @param samFile
+//     * @param vs
+//     * @return SamReader
+//     */
+//    private SamReader openSam(final File samFile, ValidationStringency vs) {
+//    	
+////    	System.setProperty("java.io.tmpdir", "");
+//
+//		final SamReaderFactory factory =
+//		          SamReaderFactory.makeDefault()
+//		              .enable(SamReaderFactory.Option.INCLUDE_SOURCE_IN_RECORDS,
+//		            		  SamReaderFactory.Option.VALIDATE_CRC_CHECKSUMS)
+//		              .validationStringency(vs);
+//
+//        final SamReader reader = factory.open(samFile);
+//        
+//        return reader;
+//    }
    
 
 }

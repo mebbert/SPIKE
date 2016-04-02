@@ -6,7 +6,11 @@ package spike.tools.utilitybelt;
 import htsjdk.samtools.Cigar;
 import htsjdk.samtools.CigarElement;
 import htsjdk.samtools.CigarOperator;
+import htsjdk.samtools.SamReader;
+import htsjdk.samtools.SamReaderFactory;
+import htsjdk.samtools.ValidationStringency;
 
+import java.io.File;
 import java.math.BigDecimal;
 import java.text.DecimalFormat;
 import java.util.ArrayList;
@@ -152,5 +156,27 @@ public class UtilityBelt {
         return Collections.unmodifiableList(alignmentBlocks);
     }
     
+	/**
+	 * 
+	 * Open a SAM/BAM file for reading and return the SamReader obj
+	 * 
+	 * @param samFile
+	 * @param vs
+	 * @return SamReader
+	 */
+	 public static SamReader openSam(final File samFile, ValidationStringency vs) {
+		 
+ //    	System.setProperty("java.io.tmpdir", "");
+
+		final SamReaderFactory factory =
+				  SamReaderFactory.makeDefault()
+					  .enable(SamReaderFactory.Option.INCLUDE_SOURCE_IN_RECORDS,
+							  SamReaderFactory.Option.VALIDATE_CRC_CHECKSUMS)
+					  .validationStringency(vs);
+
+		final SamReader reader = factory.open(samFile);
+		
+		 return reader;
+	 }
 
 }

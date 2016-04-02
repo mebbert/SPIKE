@@ -12,6 +12,10 @@ import java.util.Arrays;
  */
 public enum KnownTools {
 
+	REFERENCE_SEGMENT_GENERATOR("ReferenceSegementGenerator", "RSG", "Generate"
+			+ " and optimize reference segments to align to an individual's"
+			+ " assembled genome.",
+			new ArrayList<String>(Arrays.asList(new String[]{"RSG", "ReferenceSegementGenerator"}))),
     ALIGNER("Aligner", "AL", "Align long-read technology reads",
 			new ArrayList<String>(Arrays.asList(new String[]{"AL", "Aligner"}))),
     ASSEMBLER("Assembler", "AS", "Assemble an individual's genome",
