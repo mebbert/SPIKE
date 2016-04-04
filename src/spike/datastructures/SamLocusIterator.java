@@ -30,8 +30,13 @@ import htsjdk.samtools.util.WholeGenomeReferenceSequenceMask;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.stream.Collectors;
 
 import spike.tools.utilitybelt.UtilityBelt;
 
@@ -74,23 +79,45 @@ public class SamLocusIterator implements Iterable<SamLocusIterator.LocusInfo>, C
     public static final class LocusInfo implements Locus {
         private final SAMSequenceRecord referenceSequence;
         private final int position;
-        private final List<RecordAndOffset> recordAndOffsets = new ArrayList<RecordAndOffset>(100);
-        private final List<RecordAndOffset> recordAndOffsetsWithDeletions = new ArrayList<RecordAndOffset>(100);
+        private final List<RecordAndOffset> recordAndOffsets = new ArrayList<RecordAndOffset>(200);
+        private final List<RecordAndOffset> recordAndOffsetsWithDeletions = new ArrayList<RecordAndOffset>(200);
+        private final HashMap<String, Integer> hgRefPosFrequency = new HashMap<String, Integer>(200);
+        private final HashMap<String, Integer> hgRefPosFrequencyWithDeletions = new HashMap<String, Integer>(200);
 
         LocusInfo(final SAMSequenceRecord referenceSequence, final int position) {
+
             this.referenceSequence = referenceSequence;
             this.position = position;
         }
 
         /** Accumulate info for one read at the locus. */
-        public void add(final SAMRecord read, final int position) {
+        public void add(final SAMRecord read, final int position,
+        		String chromPos) {
+
+        	/* Track the number of times each hgRef nucleotide (by position)
+        	 * aligns to this locus on the sample's genome.
+        	 */
             recordAndOffsets.add(new RecordAndOffset(read, position));
+            if(hgRefPosFrequency.containsKey(chromPos)){
+            	hgRefPosFrequency.put(chromPos, hgRefPosFrequency.get(chromPos) + 1);
+            }
+            else{
+            	hgRefPosFrequency.put(chromPos, 1);
+            }
         }
 
         /** Accumulate info for one read at the locus. */
-        public void addWithDeletions(final SAMRecord read, final int position) {
+        public void addWithDeletions(final SAMRecord read, final int position,
+        		final String chromPos) {
             recordAndOffsetsWithDeletions.add(new RecordAndOffset(read, position));
+            if(hgRefPosFrequencyWithDeletions.containsKey(chromPos)){
+            	hgRefPosFrequencyWithDeletions.put(chromPos, hgRefPosFrequencyWithDeletions.get(chromPos) + 1);
+            }
+            else{
+            	hgRefPosFrequencyWithDeletions.put(chromPos, 1);
+            }
         }
+        
 
         public int getSequenceIndex() { return referenceSequence.getSequenceIndex(); }
 
@@ -98,6 +125,18 @@ public class SamLocusIterator implements Iterable<SamLocusIterator.LocusInfo>, C
         public int getPosition() { return position; }
         public List<RecordAndOffset> getRecordAndPositions() { return Collections.unmodifiableList(recordAndOffsets); }
         public List<RecordAndOffset> getRecordAndPositionsWithDeletions() { return Collections.unmodifiableList(recordAndOffsetsWithDeletions); }
+        public Map<String, Integer> getHGRefPositionFreqsSortedByValue() {
+        	return hgRefPosFrequency.entrySet().stream()
+        			.sorted(Entry.<String, Integer>comparingByValue().reversed())
+        			.collect(Collectors.toMap(Entry::getKey, Entry::getValue,
+        					(e1, e2) -> e1, LinkedHashMap::new));
+        }
+        public Map<String, Integer> getHGRefPositionFreqsWithDeletionsSortedByValue() {
+        	return hgRefPosFrequencyWithDeletions.entrySet().stream()
+        			.sorted(Entry.<String, Integer>comparingByValue().reversed())
+        			.collect(Collectors.toMap(Entry::getKey, Entry::getValue,
+        					(e1, e2) -> e1, LinkedHashMap::new));
+        }
         public String getSequenceName() { return referenceSequence.getSequenceName(); }
         @Override public String toString() { return referenceSequence.getSequenceName() + ":" + position; }
         public int getSequenceLength() {return referenceSequence.getSequenceLength();}
@@ -369,6 +408,14 @@ public class SamLocusIterator implements Iterable<SamLocusIterator.LocusInfo>, C
         		UtilityBelt.getAlignmentBlocks(rec.getCigar(),
         				rec.getAlignmentStart(), "read cigar", includeDeletions);
 
+        String hgRefSegmentStartLocation = rec.getReadName(),
+        		hgRefNucleotideLocation;
+        int hgRefPos,
+        		openBracketIndex = hgRefSegmentStartLocation.indexOf('['),
+        		hyphenIndex = hgRefSegmentStartLocation.indexOf('-'),
+        		hgRefStart = Integer.parseInt(hgRefSegmentStartLocation.
+        				subSequence(openBracketIndex + 1, hyphenIndex).toString());
+
         for (final AlignmentBlock alignmentBlock : alignmentBlocks) {
             final int readStart   = alignmentBlock.getReadStart();
             final int refStart    = alignmentBlock.getReferenceStart();
@@ -383,10 +430,24 @@ public class SamLocusIterator implements Iterable<SamLocusIterator.LocusInfo>, C
 
                 // if the quality score cutoff is met, accumulate the base info
                 if (dontCheckQualities || baseQualities[readOffset] >= minQuality) {
+                	
+                	/* Calculate the actual hgRef position for this nucleotide.
+                	 * In this context, the "read" is the reference genome segment
+                	 */
+                	hgRefPos = hgRefStart + readOffset;
+					hgRefNucleotideLocation = new StringBuilder()
+									.append(hgRefSegmentStartLocation, 0, openBracketIndex) // The hgRef chrom
+									.append(':')
+									.append(hgRefPos)
+									.toString();
+
                 	if(alignmentBlock.getBlockType() != CigarOperator.D){
-						accumulator.get(refOffset).add(rec, readOffset);
+						accumulator.get(refOffset).add(rec, readOffset,
+								hgRefNucleotideLocation
+								);
                 	}
-					accumulator.get(refOffset).addWithDeletions(rec, readOffset);
+					accumulator.get(refOffset).addWithDeletions(rec, readOffset,
+							hgRefNucleotideLocation);
                 }
             }
         }
