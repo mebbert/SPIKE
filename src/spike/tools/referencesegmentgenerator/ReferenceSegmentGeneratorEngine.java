@@ -136,10 +136,10 @@ public class ReferenceSegmentGeneratorEngine implements Engine {
 		int increment = parsedArgs.getInt("INCREMENT");
 		int maxLength = parsedArgs.getInt("MAX_LENGTH");
 		
-		ReferenceSegmentGenerator rsg = new ReferenceSegmentGenerator(fastqOut);
+//		ReferenceSegmentGenerator rsg = new ReferenceSegmentGenerator(fastqOut);
 		if(fastqIn != null || samBam != null){
 			// start with the fastq and optimize only
-			rsg.optimize(fastqIn, mapq, increment, maxLength);
+//			rsg.optimize(fastqIn, mapq, increment, maxLength);
 		}
 		else{
 			// start from the beginning

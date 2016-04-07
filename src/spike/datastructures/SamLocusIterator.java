@@ -3,6 +3,8 @@
  */
 package spike.datastructures;
 
+import htsjdk.samtools.Cigar;
+import htsjdk.samtools.CigarElement;
 import htsjdk.samtools.CigarOperator;
 import htsjdk.samtools.SAMException;
 import htsjdk.samtools.SAMFileHeader;
@@ -37,6 +39,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.stream.Collectors;
+
+import org.apache.log4j.Logger;
 
 import spike.tools.utilitybelt.UtilityBelt;
 
@@ -77,12 +81,14 @@ public class SamLocusIterator implements Iterable<SamLocusIterator.LocusInfo>, C
      * on the reference), plus List of ReadAndOffset objects, one for each read that overlaps the locus
      */
     public static final class LocusInfo implements Locus {
+    	private static Logger logger = Logger.getLogger(LocusInfo.class);
         private final SAMSequenceRecord referenceSequence;
         private final int position;
         private final List<RecordAndOffset> recordAndOffsets = new ArrayList<RecordAndOffset>(200);
         private final List<RecordAndOffset> recordAndOffsetsWithDeletions = new ArrayList<RecordAndOffset>(200);
         private final HashMap<String, Integer> hgRefPosFrequency = new HashMap<String, Integer>(200);
         private final HashMap<String, Integer> hgRefPosFrequencyWithDeletions = new HashMap<String, Integer>(200);
+        private final ArrayList<IntervalMassTuple> intervalMassTuples = new ArrayList<IntervalMassTuple>(2);
 
         LocusInfo(final SAMSequenceRecord referenceSequence, final int position) {
 
@@ -109,13 +115,35 @@ public class SamLocusIterator implements Iterable<SamLocusIterator.LocusInfo>, C
         /** Accumulate info for one read at the locus. */
         public void addWithDeletions(final SAMRecord read, final int position,
         		final String chromPos) {
+
             recordAndOffsetsWithDeletions.add(new RecordAndOffset(read, position));
+
             if(hgRefPosFrequencyWithDeletions.containsKey(chromPos)){
             	hgRefPosFrequencyWithDeletions.put(chromPos, hgRefPosFrequencyWithDeletions.get(chromPos) + 1);
             }
             else{
             	hgRefPosFrequencyWithDeletions.put(chromPos, 1);
             }
+        }
+        
+        public void addRefIntervalMassTuple(IntervalMassTuple imt){
+        	this.intervalMassTuples.add(imt);
+        }
+        
+        public void addRefIntervalMassTuples(ArrayList<IntervalMassTuple> imts){
+        	this.intervalMassTuples.addAll(imts);
+        }
+        
+        public IntervalMassTuple getTopRefIntervalMassTuple(){
+        	return intervalMassTuples.get(0);
+        }
+        
+        public ArrayList<IntervalMassTuple> getIntervalMassTuples(){
+        	return this.intervalMassTuples;
+        }
+        
+        public Interval getLocusInterval(){
+        	return new Interval(this.getSequenceName(), this.getPosition(), this.getPosition());
         }
         
 
@@ -125,13 +153,23 @@ public class SamLocusIterator implements Iterable<SamLocusIterator.LocusInfo>, C
         public int getPosition() { return position; }
         public List<RecordAndOffset> getRecordAndPositions() { return Collections.unmodifiableList(recordAndOffsets); }
         public List<RecordAndOffset> getRecordAndPositionsWithDeletions() { return Collections.unmodifiableList(recordAndOffsetsWithDeletions); }
+
         public Map<String, Integer> getHGRefPositionFreqsSortedByValue() {
+        	
+    		/* Sorting with lambda function in Java 8:
+    		 * http://stackoverflow.com/questions/8119366/sorting-hashmap-by-values
+    		 */	
         	return hgRefPosFrequency.entrySet().stream()
         			.sorted(Entry.<String, Integer>comparingByValue().reversed())
         			.collect(Collectors.toMap(Entry::getKey, Entry::getValue,
         					(e1, e2) -> e1, LinkedHashMap::new));
         }
+
         public Map<String, Integer> getHGRefPositionFreqsWithDeletionsSortedByValue() {
+        	
+    		/* Sorting with lambda function in Java 8:
+    		 * http://stackoverflow.com/questions/8119366/sorting-hashmap-by-values
+    		 */
         	return hgRefPosFrequencyWithDeletions.entrySet().stream()
         			.sorted(Entry.<String, Integer>comparingByValue().reversed())
         			.collect(Collectors.toMap(Entry::getKey, Entry::getValue,
@@ -414,7 +452,9 @@ public class SamLocusIterator implements Iterable<SamLocusIterator.LocusInfo>, C
         		openBracketIndex = hgRefSegmentStartLocation.indexOf('['),
         		hyphenIndex = hgRefSegmentStartLocation.indexOf('-'),
         		hgRefStart = Integer.parseInt(hgRefSegmentStartLocation.
-        				subSequence(openBracketIndex + 1, hyphenIndex).toString());
+        				subSequence(openBracketIndex + 1, hyphenIndex).toString()),
+        		numHardClippedOnFront = numHardClippedBasesOnFront(rec.getCigar());
+        
 
         for (final AlignmentBlock alignmentBlock : alignmentBlocks) {
             final int readStart   = alignmentBlock.getReadStart();
@@ -434,7 +474,7 @@ public class SamLocusIterator implements Iterable<SamLocusIterator.LocusInfo>, C
                 	/* Calculate the actual hgRef position for this nucleotide.
                 	 * In this context, the "read" is the reference genome segment
                 	 */
-                	hgRefPos = hgRefStart + readOffset;
+                	hgRefPos = hgRefStart + readOffset + numHardClippedOnFront; 
 					hgRefNucleotideLocation = new StringBuilder()
 									.append(hgRefSegmentStartLocation, 0, openBracketIndex) // The hgRef chrom
 									.append(':')
@@ -451,6 +491,19 @@ public class SamLocusIterator implements Iterable<SamLocusIterator.LocusInfo>, C
                 }
             }
         }
+    }
+    
+    private int numHardClippedBasesOnFront(Cigar cigar){
+    	
+    	Iterator<CigarElement> it = cigar.iterator();
+    	
+    	CigarElement e;
+    	int nHardClipped = 0;
+    	while(it.hasNext()
+    			&& ((e = it.next()).getOperator()) == CigarOperator.H){
+    		nHardClipped += e.getLength();
+    	}
+    	return nHardClipped;
     }
 
     /**
@@ -502,7 +555,12 @@ public class SamLocusIterator implements Iterable<SamLocusIterator.LocusInfo>, C
     private void populateCompleteQueue(final Locus stopBeforeLocus) {
         // Because of gapped alignments, it is possible to create LocusInfo's with no reads associated with them.
         // Skip over these.
-        while (!accumulator.isEmpty() && accumulator.get(0).getRecordAndPositions().isEmpty() &&
+//        while (!accumulator.isEmpty() && accumulator.get(0).getRecordAndPositions().isEmpty() &&
+
+    	/* I (Mark Ebbert) Modified this to only remove the locus if it doesn't have coverage INCLUDING
+    	 * deletions
+    	 */
+        while (!accumulator.isEmpty() && accumulator.get(0).getRecordAndPositionsWithDeletions().isEmpty() &&
                locusComparator.compare(accumulator.get(0), stopBeforeLocus) < 0) {
             accumulator.remove(0);
         }

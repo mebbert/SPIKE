@@ -99,8 +99,8 @@ public class ReferenceSegmentGenerator {
 				// increment the read and write to a new fastq
 			}
 			else{
-				FastqRecord fr = new FastqRecord(seqHeaderPrefix, seqLine, qualHeaderPrefix, qualLine)
-				acceptableReadsWriter.write(rec);
+//				FastqRecord fr = new FastqRecord(seqHeaderPrefix, seqLine, qualHeaderPrefix, qualLine)
+//				acceptableReadsWriter.write(rec);
 			}
 		}
 	}

@@ -95,13 +95,23 @@ public class StructuralVariantCallerEngine implements Engine {
 				.help("The minimum size structural variant to consider.");
 
 		svcOptions
-				.addArgument("-m", "--min-mapping-quality")
-				.dest("MinMapQual")
-				.metavar("QUAL")
+				.addArgument("-l", "--lower-mapping-quality-threshold")
+				.dest("LowMapQual")
+				.metavar("LOW_QUAL")
 				.setDefault(1)
 				.type(Integer.class)
 				.help("The minimum mapping quality to consider a given"
 						+ " read.");
+		
+		svcOptions
+				.addArgument("-u", "--upper-mapping-quality-threshold")
+				.dest("HighMapQual")
+				.metavar("HIGH_QUAL")
+				.setDefault(50)
+				.type(Integer.class)
+				.help("The minimum mapping quality to consider a given"
+						+ " read.");
+
 		
 		svcOptions
 				.addArgument("-d", "--min-depth")
@@ -164,7 +174,8 @@ public class StructuralVariantCallerEngine implements Engine {
 		String hgRef = parsedArgs.getString("HG_REF");
 
 		int minSVSize = parsedArgs.getInt("MIN_SIZE");
-		int minMapQual = parsedArgs.getInt("MinMapQual");
+		int lowMapQual = parsedArgs.getInt("LowMapQual");
+		int highMapQual = parsedArgs.getInt("HighMapQual");
 		int minDepth = parsedArgs.getInt("MinDepth");
 		int expectedCoverage = parsedArgs.getInt("ExpectedCoverage");
 		int maxClip = parsedArgs.getInt("CLIP");
@@ -193,7 +204,7 @@ public class StructuralVariantCallerEngine implements Engine {
 			// Do your thing.
 			StructuralVariantCaller svc = new StructuralVariantCaller(new File(sam),
 					new File(vcf), new File(sampleRef), new File(hgRef),
-					minSVSize, minMapQual, minDepth, maxAcceptableCoverage, 
+					minSVSize, lowMapQual, highMapQual, minDepth, maxAcceptableCoverage, 
 					maxClip, vs);
 
 			svc.startWalkingByLocus();
