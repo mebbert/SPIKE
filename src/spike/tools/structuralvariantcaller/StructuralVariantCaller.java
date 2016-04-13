@@ -67,7 +67,11 @@ public class StructuralVariantCaller /*implements Runnable*/ {
 //				sampDeletionPreList, sampDeletionPostList, hgDeletionPreList,
 //				hgDeletionPostList;
 	private LinkedList<VariantContext> deletionVarList;
-	private TreeMap<Integer, VariantContext> pendingVarList;
+	
+	/* Variant list where Integer is the variant's starting position based
+	 * on the sample's contig.
+	 */
+	private TreeMap<Integer, VariantContext> varList;
 
 	private IndexedFastaSequenceFile sampleRefReader, hgRefReader;
 	private SAMFileHeader header;
@@ -116,7 +120,7 @@ public class StructuralVariantCaller /*implements Runnable*/ {
 //		this.hgDeletionPreList = new LinkedList<Interval>();
 //		this.hgDeletionPostList = new LinkedList<Interval>();
 		this.deletionVarList = new LinkedList<VariantContext>();
-		this.pendingVarList = new TreeMap<Integer, VariantContext>();
+		this.varList = new TreeMap<Integer, VariantContext>();
 		
 		this.sampleRefReader =
 				new IndexedFastaSequenceFile(sampleRef);
@@ -255,13 +259,10 @@ public class StructuralVariantCaller /*implements Runnable*/ {
         		logger.debug("here");
         	}
 
-			/* Get depth at this position. If there is excessive coverage,
-			 * we can't trust the data in this region.
+			/* Get depth at this position.
 			 */
 			int depth = locus.getRecordAndPositions().size();
 			
-//			if(depth >= maxAcceptableCoverage) continue;
-
 			currTopTwoHGRefLociIntervals =
 					generateHumanGenomeRefIntervalByMass(locus);
 			
@@ -270,11 +271,6 @@ public class StructuralVariantCaller /*implements Runnable*/ {
 					new Interval(locus.getSequenceName(), locus.getPosition(),
 							locus.getPosition());
 			
-			/* TODO: Always add the locus to runningLiq. How to handle
-			 * null HGRefIntervals? We don't want to put in wild values. At
-			 * what proportion can we trust the top hit?? 10%? Then we simply
-			 * must ignore regions with nulls?
-			 */
 			
 //			if(currTopTwoHGRefLociIntervals == null ||
 //					prevTopTwoHGRefLociIntervals == null){
@@ -328,8 +324,6 @@ public class StructuralVariantCaller /*implements Runnable*/ {
 				averagePosQueue.clear();
 			}
 			
-			/* if we had a major break, investigate */
-			// investigate();
 			
 			/* At every locus, check if a mass of reads are out of order
 			 * between the previous and current locus. The order is based
@@ -601,7 +595,7 @@ public class StructuralVariantCaller /*implements Runnable*/ {
 
 								if(var != null){
 //									pendingVarList.put(hgRefLocusIntervalCovLost.getStart() - 1, var);
-									pendingVarList.put(sampRefLocusIntervalCovLost.getStart() - 1, var);
+									varList.put(sampRefLocusIntervalCovLost.getStart() - 1, var);
 								}
 
 								/* Write any deletions that remain in the list */
@@ -636,6 +630,138 @@ public class StructuralVariantCaller /*implements Runnable*/ {
 			System.out.println(svb);
 		}
 		sli.close();
+		
+		resolveVariantsBetween(0, svBoundaries.size());
+	}
+	
+	
+	private void resolveVariantsBetween(int beginIndex, int endIndex){
+		
+		/* Loop over the boundaries to resolve all 
+		 * non-deletion variants
+		 */
+		for(int i = beginIndex; i < endIndex; i++){
+			for(int j = i+1; j < endIndex; j++){
+				if(LocusInfoQueue.
+						intervalsOrderedNonOverlapping(svBoundaries.get(i).hgPre,
+								svBoundaries.get(j).hgPost)){
+					
+					/* create variant and remove boundaries, then resolve all
+					 * in between.
+					 */
+					
+					/* If i and j are adjacent boundaries, they must be independent
+					 * deletions.
+					 */
+					if(i+1 != j){
+						
+						/* If there is one boundary between i and j, it must
+						 * be a deletion. If there are multiple boundaries
+						 * between i and j, recurse.
+						 */
+						if(i+1 != j+1){
+							resolveVariantsBetween(i+1, j-1);
+						}
+						else{ // This must be a deletion
+							/* Create the variant and advance i to j, which will
+							 * increment to j+1 at the end of the loop.
+							 */
+						}
+					}
+					i = j;
+					break; /* Break from j loop and keep going */
+				}
+			}
+			
+			/* If we get through all of 'j' without finding a boundary match,
+			 * this must be a deletion.
+			 * 
+			 * Throw new RuntimeException if the signature does not match
+			 * a deletion. Something must be wrong.
+			 */
+//			buildVariant(header, sampleContig, sampVarStart, sampVarEnd, refContig, refStart, refEnd)
+		}
+		
+		/* Loop backwards over the lists to see if we can
+		 * resolve any boundaries
+		 */
+//		for(int i = sampPreList.size() - 1; i >= 0; i--){
+//			
+//			if(LocusInfoQueue.intervalsOrderedNonOverlapping(
+//							this.sampPreList.get(i), postSampLocus)){
+//
+//				/* See if preList.get(i) was previously treated
+//				 * as a deletion. If so, get rid of it
+//				 * 
+//				 * TODO: Make sure the Interval.class equals method
+//				 * is being called appropriately.
+//				 */
+//				int index = sampDeletionPreList.indexOf(sampPreList.get(i));
+//				if(index >= 0){
+//					pendingVarList.remove(deletionVarList.get(index).getStart());
+//					sampDeletionPreList.remove(index);
+//					sampDeletionPostList.remove(index);
+//					hgDeletionPreList.remove(index);
+//					hgDeletionPostList.remove(index);
+//					deletionVarList.remove(index);
+//				}
+//				
+//				
+//				/* Since we found the match, now loop forward from
+//				 * where we are, resolving all boundaries in between.
+//				 */
+//				for(int j = i + 1; j < sampPreList.size(); ){
+//
+//					/* For translocations/copy gains, the ref allele's
+//					 * start and end location will
+//					 * be the nucleotide (on the HG ref's sequence) just
+//					 * before the inserted sequence (refVarStart).
+//					 * 
+//					 * The alt allele's start will be at the same location,
+//					 * and will end on the last nucleotide of the inserted
+//					 * sequence.
+//					 */
+//
+//					/* Create and write the variant */
+//					refVarStart = this.hgPreList.get(i);
+//					refVarEnd = refVarStart;
+//					sampVarStart = this.sampPreList.get(i);
+//					sampVarEnd = this.sampPreList.get(j);
+//					var = buildVariant(this.header,
+//							sampVarStart.getContig(),
+//							sampVarStart.getStart(),
+//							sampVarEnd.getEnd(),
+//							refVarStart.getContig(),
+//							refVarStart.getEnd(),
+//							refVarEnd.getStart()
+//							);
+////					this.vw.writeVariantToVCF(var);
+//					
+//					if(var != null){
+//						pendingVarList.put(sampVarStart.getStart(), var);
+//						
+//						/* remove this boundary from pre and post list */
+//						sampPreList.remove(i);
+//						sampPostList.remove(i);
+//						hgPreList.remove(i);
+//						hgPostList.remove(i);
+//
+//						/* don't increment i or j, because we just
+//						 * removed the objects at i.
+//						 */
+//					}
+//					else{
+//						logger.debug("Var == null");
+//						logger.debug("i: " + i);
+//						logger.debug("j: " + j);
+//					}
+//					
+//				}
+//				
+//				
+//				break;
+//			}
+//		}
 	}
 	
 	
@@ -652,7 +778,7 @@ public class StructuralVariantCaller /*implements Runnable*/ {
 	 * the the max is below the expected proportion by mass.
 	 * @throws IOException 
 	 */
-	public ArrayList<IntervalMassTuple>
+	private ArrayList<IntervalMassTuple>
 			generateHumanGenomeRefIntervalByMass(LocusInfo locus) throws IOException{
 		
 		/* Include reads that "cover" this locus with a deletion when
