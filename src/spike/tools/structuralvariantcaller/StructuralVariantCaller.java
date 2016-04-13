@@ -597,12 +597,6 @@ public class StructuralVariantCaller /*implements Runnable*/ {
 //									pendingVarList.put(hgRefLocusIntervalCovLost.getStart() - 1, var);
 									varList.put(sampRefLocusIntervalCovLost.getStart() - 1, var);
 								}
-
-								/* Write any deletions that remain in the list */
-								/* TODO: Make sure this is the appropriate place. Want
-								 * to do it once we've seen the next insertion/inversion/duplication
-								 */
-//								writePendingVars();
 								break;
 							}
 							else{
@@ -646,27 +640,42 @@ public class StructuralVariantCaller /*implements Runnable*/ {
 						intervalsOrderedNonOverlapping(svBoundaries.get(i).hgPre,
 								svBoundaries.get(j).hgPost)){
 					
-					/* create variant and remove boundaries, then resolve all
+					/* create variant, then resolve all
 					 * in between.
 					 */
 					
-					/* If i and j are adjacent boundaries, they must be independent
-					 * deletions.
+					/* Create variant, then resolve all in between.
+					 * 
+					 * For any type of insertion (translocations/copy gains),
+					 * the ref allele's start and end location will
+					 * be the nucleotide (on the HG ref's sequence) just
+					 * before the inserted sequence (refVarStart).
+					 * 
+					 * The alt allele's start will be at the same location,
+					 * and will end on the last nucleotide of the inserted
+					 * sequence.
 					 */
-					if(i+1 != j){
+
+					/* Create and store the variant */
+					varList.put(svBoundaries.get(i).sampPre.getEnd(),
+							buildVariant(this.header,
+									svBoundaries.get(i).sampPre.getContig(),
+									svBoundaries.get(i).sampPre.getEnd(), // alt start
+									svBoundaries.get(j).sampPre.getEnd(), // alt end
+									svBoundaries.get(i).hgPre.getContig(),
+									svBoundaries.get(i).hgPre.getEnd(), // refStart
+									svBoundaries.get(i).hgPre.getEnd()) // refEnd
+							);
+					
+					
 						
-						/* If there is one boundary between i and j, it must
-						 * be a deletion. If there are multiple boundaries
-						 * between i and j, recurse.
-						 */
-						if(i+1 != j+1){
-							resolveVariantsBetween(i+1, j-1);
-						}
-						else{ // This must be a deletion
-							/* Create the variant and advance i to j, which will
-							 * increment to j+1 at the end of the loop.
-							 */
-						}
+					/* If there is one boundary between i and j, it must
+					 * be a deletion and will be caught in the i loop. If
+					 * there are multiple boundaries between i and j,
+					 * recurse.
+					 */
+					if(i+1 != j-1){
+						resolveVariantsBetween(i+1, j-1);
 					}
 					i = j;
 					break; /* Break from j loop and keep going */
@@ -676,10 +685,25 @@ public class StructuralVariantCaller /*implements Runnable*/ {
 			/* If we get through all of 'j' without finding a boundary match,
 			 * this must be a deletion.
 			 * 
+			 * For deletions, the alt's start and end location will
+			 * be the nucleotide (on the sample's sequence) just
+			 * before the deleted sequence (sampleVarStart).
+			 * 
+			 * The ref allele's start will be at the same location,
+			 * and will end on the last nucleotide of the deleted
+			 * sequence.
+			 * 
 			 * Throw new RuntimeException if the signature does not match
 			 * a deletion. Something must be wrong.
 			 */
-//			buildVariant(header, sampleContig, sampVarStart, sampVarEnd, refContig, refStart, refEnd)
+			varList.put(svBoundaries.get(i).sampPre.getEnd(), 
+					buildVariant(this.header, svBoundaries.get(i).sampPre.getContig(),
+						svBoundaries.get(i).sampPre.getEnd(), // alt start
+						svBoundaries.get(i).sampPre.getEnd(), // alt end
+						svBoundaries.get(i).hgPre.getContig(), // refContig
+						svBoundaries.get(i).hgPre.getEnd(), // refStart
+						svBoundaries.get(i).hgPost.getStart()) // refEnd
+					);
 		}
 		
 		/* Loop backwards over the lists to see if we can
